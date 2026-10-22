@@ -2,6 +2,10 @@ name: instabox-keepalive
 
 # 每 5 分钟向 instabox 沙箱发起一次 SSH 握手，避免实例闲置被判为 idle 而暂停。
 # 凭证只从 Actions Secret 读取，仓库里不出现任何 token。
+#
+# 另外：公开仓库的 schedule 在连续 60 天无仓库活动后会被 GitHub 自动禁用，
+# 所以每天首次运行时顺便提交一次 .state/last-active 作为"活动标记"。
+# 不做成每次运行都提交——5 分钟一次等于一天 288 个 commit，纯属污染历史。
 
 on:
   schedule:
@@ -15,13 +19,19 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write          # 下拉代码 + 推送每日活动标记
 
 jobs:
   heartbeat:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - name: Checkout
+        if: github.event_name != 'push'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: SSH heartbeat
         env:
           IB_USER: ${{ secrets.INSTABOX_SSH_USER }}
@@ -60,3 +70,25 @@ jobs:
               -o ServerAliveCountMax=4 \
               "${IB_USER}@${IB_HOST}" \
               'echo "alive at $(date -u +%FT%TZ)"; uptime'
+
+      - name: Keep repository active
+        # 即使握手失败也要跑：不能让"60 天无活动"因为沙箱临时故障就把定时任务停掉。
+        if: always() && github.event_name != 'push'
+        run: |
+          set -euo pipefail
+          today="$(date -u +%F)"
+          last="$(cat .state/last-active 2>/dev/null || echo '')"
+
+          if [ "${last}" = "${today}" ]; then
+            echo "今天（${today}）已经打点，跳过"
+            exit 0
+          fi
+
+          mkdir -p .state
+          printf '%s\n' "${today}" > .state/last-active
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .state/last-active
+          git commit -m "chore(keepalive): 活动标记 ${today}"
+          # 并发时远端可能已前进，rebase 后重试一次。
+          git push || { git pull --rebase --autostash && git push; }
