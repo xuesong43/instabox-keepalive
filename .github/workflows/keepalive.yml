@@ -48,7 +48,7 @@ jobs:
             && echo "tcp ${IB_HOST}:${IB_PORT} open" \
             || echo "tcp ${IB_HOST}:${IB_PORT} BLOCKED"
 
-          ssh -v -p "${IB_PORT}" \
+          ssh -p "${IB_PORT}" \
               -o StrictHostKeyChecking=accept-new \
               -o UserKnownHostsFile="${HOME}/.ssh/known_hosts" \
               -o BatchMode=yes \
