@@ -1,0 +1,53 @@
+name: instabox-keepalive
+
+# 每 5 分钟向 instabox 沙箱发起一次 SSH 握手，避免实例闲置被判为 idle 而暂停。
+# 凭证只从 Actions Secret 读取，仓库里不出现任何 token。
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # UTC，实际触发常延迟 1-10 分钟
+  workflow_dispatch:        # 手动触发一次，用来验证凭证是否配对
+  push:
+    branches: [main]
+
+concurrency:
+  group: instabox-keepalive
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  heartbeat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: SSH heartbeat
+        env:
+          IB_USER: ${{ secrets.INSTABOX_SSH_USER }}
+          IB_HOST: ssh.instabox.sh
+          IB_PORT: "2222"
+        run: |
+          set -euo pipefail
+
+          if [ -z "${IB_USER}" ]; then
+            echo "::error::缺少 secret INSTABOX_SSH_USER"
+            exit 1
+          fi
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          ssh-keyscan -p "${IB_PORT}" "${IB_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
+
+          # 该实例"用户名即 token"，没有密码也没有密钥。
+          # 必须关掉公钥/密码/交互式认证，否则 ssh 会在非交互环境里卡住等待输入。
+          ssh -p "${IB_PORT}" \
+              -o BatchMode=yes \
+              -o PubkeyAuthentication=no \
+              -o PasswordAuthentication=no \
+              -o KbdInteractiveAuthentication=no \
+              -o ConnectTimeout=20 \
+              -o ServerAliveInterval=15 \
+              -o ServerAliveCountMax=4 \
+              "${IB_USER}@${IB_HOST}" \
+              'echo "alive at $(date -u +%FT%TZ)"; uptime'
