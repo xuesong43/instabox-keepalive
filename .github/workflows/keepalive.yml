@@ -28,7 +28,7 @@ jobs:
           IB_HOST: ssh.instabox.sh
           IB_PORT: "2222"
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           if [ -z "${IB_USER}" ]; then
             echo "::error::缺少 secret INSTABOX_SSH_USER"
@@ -37,11 +37,20 @@ jobs:
 
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
-          ssh-keyscan -p "${IB_PORT}" "${IB_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
+          # keyscan 失败不应中断流程：ssh 自己也带 accept-new 兜底。
+          ssh-keyscan -p "${IB_PORT}" "${IB_HOST}" >> ~/.ssh/known_hosts 2>/dev/null \
+            || echo "::warning::ssh-keyscan 未取到主机密钥，改用 accept-new"
 
           # 该实例"用户名即 token"，没有密码也没有密钥。
           # 必须关掉公钥/密码/交互式认证，否则 ssh 会在非交互环境里卡住等待输入。
-          ssh -p "${IB_PORT}" \
+          echo "--- connectivity ---"
+          timeout 20 bash -c "cat < /dev/null > /dev/tcp/${IB_HOST}/${IB_PORT}" \
+            && echo "tcp ${IB_HOST}:${IB_PORT} open" \
+            || echo "tcp ${IB_HOST}:${IB_PORT} BLOCKED"
+
+          ssh -v -p "${IB_PORT}" \
+              -o StrictHostKeyChecking=accept-new \
+              -o UserKnownHostsFile="${HOME}/.ssh/known_hosts" \
               -o BatchMode=yes \
               -o PubkeyAuthentication=no \
               -o PasswordAuthentication=no \
